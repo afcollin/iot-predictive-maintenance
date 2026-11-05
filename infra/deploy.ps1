@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Udruller Asset Condition Monitoring til Azure: Container Apps, PostgreSQL, Key Vault og Container Registry.
 
