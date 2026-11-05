@@ -149,9 +149,48 @@ flowchart LR
     T --> B["Docker build<br/>+ smoke test af event-flowet"]
     SEC --> B
     B -- "kun main" --> G["Publicér image<br/>ghcr.io"]
+    G --> D["Deploy til Azure<br/>OIDC → ACR → Container Apps<br/>+ health check"]
 ```
 
+Pull requests kører test, sikkerhedsscanning og smoke test, men deployer ikke. Kun `main` deployes.
+Det image, der deployes, er præcis det, der blev testet (build once, deploy many).
 Dependabot (`.github/dependabot.yml`) foreslår ugentligt opdateringer af afhængigheder, actions og base-image.
+
+## Drift i Azure
+
+Infrastrukturen er beskrevet som kode i `infra/main.bicep` og udrulles med `infra/deploy.ps1`.
+
+```mermaid
+flowchart LR
+    GH["GitHub Actions"] -- "OIDC (ingen adgangskoder)" --> MI1["Managed identity<br/>id-iotpm-github"]
+    MI1 -- AcrPush --> ACR["Container Registry"]
+    MI1 -- "Contributor (kun app'en)" --> CA
+    DEV["IoT-enhed / Postman"] -- HTTPS --> CA["Container App<br/>FastAPI · 0-2 instanser"]
+    CA -- "id-iotpm-app: AcrPull" --> ACR
+    CA -- "id-iotpm-app: Secrets User" --> KV["Key Vault<br/>api-key · database-url"]
+    CA -- TLS --> PG[("PostgreSQL<br/>Flexible Server")]
+    CA -- stdout --> LA["Log Analytics"]
+```
+
+| Ressource | Formål |
+|---|---|
+| Container Apps | Kører API'et serverless med HTTPS, health probes og autoskalering |
+| PostgreSQL Flexible Server (B1ms) | Separat database for domain events og alarmer, kun TLS |
+| Key Vault | API-nøgle og database-forbindelse. Appen henter dem via sin managed identity |
+| Container Registry | Private images. Kun adgang via Entra ID-identiteter (admin-bruger slået fra) |
+| Log Analytics | Samler appens JSON-logs til søgning og overvågning |
+| Managed identities | `id-iotpm-app` (læse image og secrets) og `id-iotpm-github` (deploy). Least privilege |
+
+```powershell
+az login
+./infra/deploy.ps1 -Location francecentral     # første gang ca. 10-15 min
+az keyvault secret show --vault-name <kv-navn> --name api-key --query value -o tsv   # hent API-nøglen
+```
+
+Abonnementet (Azure for Students) tillader kun swedencentral, polandcentral, francecentral, germanywestcentral og austriaeast,
+og PostgreSQL B1ms afvises i swedencentral og polandcentral. Derfor kører løsningen i **francecentral**.
+Skoletenanten kræver MFA for at oprette ressourcer via CLI (`az login --claims-challenge ...`, som CLI'en selv foreslår).
+Slet alt igen med `az group delete -n rg-iot-predictive-maintenance`.
 
 ## Sikkerhed og privacy by design
 
