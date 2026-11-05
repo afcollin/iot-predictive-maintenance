@@ -49,6 +49,7 @@ var roles = {
   keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
   keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
   contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+  reader: 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 }
 
 // --- Identiteter (ingen adgangskoder: Azure udsteder tokens) ------------------
@@ -321,6 +322,16 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployApp) {
     acrPullForApp
     secretsUserForApp
   ]
+}
+
+// GitHub skal kunne læse registry og Container Apps-miljø (az acr login / az containerapp update), men ikke ændre dem
+resource readerOnGroupForGithub 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, githubIdentity.id, roles.reader)
+  properties: {
+    principalId: githubIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.reader)
+  }
 }
 
 // Least privilege: GitHub må kun opdatere selve Container App'en, ikke database eller Key Vault
