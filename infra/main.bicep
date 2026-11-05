@@ -12,6 +12,12 @@ param location string = resourceGroup().location
 @description('GitHub-repo i formatet ejer/navn, som må deploye via OIDC.')
 param githubRepo string
 
+@description('GitHub-ejerens numeriske id. Bruges i det nye, uforanderlige OIDC-subject-format.')
+param githubOwnerId string = ''
+
+@description('Repo\'ets numeriske id. Bruges i det nye, uforanderlige OIDC-subject-format.')
+param githubRepoId string = ''
+
 @description('Opret selve Container App\'en. Første kørsel er false, fordi image\'et skal ligge i registry\'et først.')
 param deployApp bool = false
 
@@ -75,6 +81,20 @@ resource githubFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/fede
     subject: 'repo:${githubRepo}:ref:refs/heads/main'
     audiences: ['api://AzureADTokenExchange']
   }
+}
+
+// GitHub bruger i dag ejer- og repo-id i subject: repo:ejer@id/repo@id:ref:refs/heads/main.
+// Id'erne gør, at et omdøbt eller genoprettet repo med samme navn ikke kan overtage tilliden.
+resource githubFederationImmutable 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = if (!empty(githubOwnerId) && !empty(githubRepoId)) {
+  parent: githubIdentity
+  name: 'github-main-immutable'
+  properties: {
+    issuer: 'https://token.actions.githubusercontent.com'
+    subject: 'repo:${split(githubRepo, '/')[0]}@${githubOwnerId}/${split(githubRepo, '/')[1]}@${githubRepoId}:ref:refs/heads/main'
+    audiences: ['api://AzureADTokenExchange']
+  }
+  // Azure tillader ikke samtidige ændringer af credentials på samme identitet
+  dependsOn: [githubFederation]
 }
 
 // --- Container Registry ---------------------------------------------------------
@@ -230,6 +250,8 @@ resource environment 'Microsoft.App/managedEnvironments@2025-10-02-preview' = {
   location: location
   tags: tags
   properties: {
+    // Bicep-typerne kender endnu ikke egenskaben, men Azure accepterer den (verificeret ved udrulning)
+    #disable-next-line BCP037
     environmentMode: 'WorkloadProfiles'
     workloadProfiles: [
       {
