@@ -222,11 +222,21 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
+// Preview-API'et er nødvendigt for at vælge environmentMode. Uden det opretter Azure et "Express"-miljø,
+// som ikke understøtter hemmeligheder hentet fra Key Vault. WorkloadProfiles med Consumption-profil
+// understøtter Key Vault-referencer og koster stadig kun efter forbrug.
+resource environment 'Microsoft.App/managedEnvironments@2025-10-02-preview' = {
   name: 'cae-iotpm'
   location: location
   tags: tags
   properties: {
+    environmentMode: 'WorkloadProfiles'
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
@@ -247,6 +257,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (deployApp) {
   }
   properties: {
     managedEnvironmentId: environment.id
+    workloadProfileName: 'Consumption'
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
