@@ -91,9 +91,14 @@ $dbPassword = if ($RotateSecrets) { $null } else { Get-ExistingSecret $existingV
 if (-not $apiKey) { $apiKey = New-Secret 40; Write-Host "Ny API-nøgle genereret" }
 if (-not $dbPassword) { $dbPassword = "Aa1" + (New-Secret 29); Write-Host "Ny databaseadgangskode genereret" }
 
+$githubOwnerId = (Invoke-Native gh api "repos/$GitHubRepo" --jq .owner.id | Out-String).Trim()
+$githubRepoId = (Invoke-Native gh api "repos/$GitHubRepo" --jq .id | Out-String).Trim()
+
 $parameters = @{
     location         = $Location
     githubRepo       = $GitHubRepo
+    githubOwnerId    = $githubOwnerId
+    githubRepoId     = $githubRepoId
     apiKey           = $apiKey
     dbPassword       = $dbPassword
     adminPrincipalId = $adminPrincipalId
