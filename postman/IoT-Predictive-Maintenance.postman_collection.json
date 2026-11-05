@@ -1,0 +1,190 @@
+{
+  "info": {
+    "name": "IoT Predictive Maintenance MVP",
+    "description": "Demo af flowet Sensor Value Received -> Threshold-check -> Anomaly Detected -> alarm. Kør mapperne i rækkefølge. Ret variablen baseUrl, hvis API'et kører på en anden maskine eller i Azure.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{apiKey}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "apiKey", "value": "local-dev-key" },
+    { "key": "alarmId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Drift",
+      "item": [
+        {
+          "name": "Health check",
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "url": "{{baseUrl}}/health" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('API kører og databasen svarer', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().database).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tærskelregler",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/thresholds" }
+        }
+      ]
+    },
+    {
+      "name": "2. Event -> beslutning -> handling",
+      "item": [
+        {
+          "name": "Normal måling (ingen anomali)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/sensor-readings",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"asset_id\": \"WTG-AAL-07\",\n  \"device_id\": \"SNS-000123\",\n  \"metric\": \"gearbox_vibration\",\n  \"value\": 3.2\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Målingen er modtaget uden anomali', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  pm.expect(pm.response.json().anomaly_detected).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Kritisk vibration (anomali + alarm)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/sensor-readings",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"asset_id\": \"WTG-AAL-07\",\n  \"device_id\": \"SNS-000123\",\n  \"metric\": \"gearbox_vibration\",\n  \"value\": 12.4\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const body = pm.response.json();",
+                  "pm.test('Anomali registreret og alarm oprettet', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  pm.expect(body.anomaly_detected).to.be.true;",
+                  "  pm.expect(body.severity).to.eql('CRITICAL');",
+                  "  pm.expect(body.alarm_id).to.be.a('string');",
+                  "});",
+                  "pm.collectionVariables.set('alarmId', body.alarm_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lavt olietryk (nedre tærskel)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/sensor-readings",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"asset_id\": \"WTG-AAL-07\",\n  \"device_id\": \"SNS-000124\",\n  \"metric\": \"oil_pressure\",\n  \"value\": 1.3\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Persisterede data",
+      "item": [
+        {
+          "name": "Alarmer",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/alarms" }
+        },
+        {
+          "name": "Domain events",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/events?asset_id=WTG-AAL-07" }
+        },
+        {
+          "name": "Kvittér for alarm",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/alarms/{{alarmId}}/acknowledge",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"acknowledged_by\": \"OP-117\"\n}" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Alarmen er kvitteret', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().status).to.eql('ACKNOWLEDGED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Fejlhåndtering",
+      "item": [
+        {
+          "name": "Uden API-nøgle (401)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/sensor-readings",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"asset_id\": \"WTG-AAL-07\",\n  \"device_id\": \"SNS-000123\",\n  \"metric\": \"gearbox_vibration\",\n  \"value\": 3.2\n}"
+            }
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": ["pm.test('Afvist uden nøgle', () => pm.response.to.have.status(401));"] } }
+          ]
+        },
+        {
+          "name": "Umulig værdi = sensorfejl (422)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/api/v1/sensor-readings",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"asset_id\": \"WTG-AAL-07\",\n  \"device_id\": \"SNS-000123\",\n  \"metric\": \"gearbox_vibration\",\n  \"value\": 500\n}"
+            }
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": ["pm.test('Afvist som sensorfejl', () => pm.response.to.have.status(422));"] } }
+          ]
+        }
+      ]
+    }
+  ]
+}

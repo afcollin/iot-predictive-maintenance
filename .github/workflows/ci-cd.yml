@@ -1,0 +1,88 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint og test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Unit- og integrationstests (pytest)
+        run: pytest --cov=app --cov-report=term-missing
+
+  security:
+    name: Sikkerhedsscanning (DevSecOps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: SAST - statisk analyse af koden (bandit)
+        run: bandit -r app -ll
+      - name: SCA - kendte sårbarheder i afhængigheder (pip-audit)
+        run: pip-audit -r requirements.txt
+
+  build:
+    name: Docker build, smoke test og publish
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      API_KEY: ci-smoke-test-key
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Byg og start API og database
+        run: docker compose up -d --build --wait db api
+
+      - name: Smoke test af event-flowet
+        run: |
+          set -euo pipefail
+          curl -fsS http://localhost:8000/health
+          echo
+          curl -fsS -X POST http://localhost:8000/api/v1/sensor-readings \
+            -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+            -d '{"asset_id":"WTG-CI-01","device_id":"SNS-CI-01","metric":"gearbox_vibration","value":12.5}'
+          echo
+          curl -fsS "http://localhost:8000/api/v1/alarms?asset_id=WTG-CI-01" -H "X-API-Key: $API_KEY" | tee alarms.json
+          grep -q '"status":"OPEN"' alarms.json
+
+      - name: Vis container-logs ved fejl
+        if: failure()
+        run: docker compose logs
+
+      - name: Publicér image til GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker tag iot-predictive-maintenance:local "$IMAGE:latest"
+          docker tag iot-predictive-maintenance:local "$IMAGE:sha-${GITHUB_SHA::7}"
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:sha-${GITHUB_SHA::7}"
+
+      - name: Ryd op
+        if: always()
+        run: docker compose down -v

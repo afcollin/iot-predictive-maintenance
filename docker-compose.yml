@@ -1,0 +1,47 @@
+# Starter hele løsningen lokalt:  docker compose up -d --build
+#   API + Swagger:  http://localhost:8000/docs
+#   Adminer (DB):   http://localhost:8080  (System: PostgreSQL, Server: db, Bruger: iot, Database: iot_monitoring)
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: iot_monitoring
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iot-local-password}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # Databasen udstilles ikke på værtens netværk; kun api og adminer kan nå den
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot -d iot_monitoring"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    image: iot-predictive-maintenance:local
+    environment:
+      DATABASE_URL: postgresql+psycopg://iot:${POSTGRES_PASSWORD:-iot-local-password}@db:5432/iot_monitoring
+      API_KEY: ${API_KEY:-local-dev-key}
+      NOTIFY_WEBHOOK_URL: ${NOTIFY_WEBHOOK_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:5
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+volumes:
+  db-data:
