@@ -86,3 +86,58 @@ jobs:
       - name: Ryd op
         if: always()
         run: docker compose down -v
+
+  deploy:
+    name: Deploy til Azure Container Apps
+    needs: [build]
+    # Kun fra main, og kun når Azure er sat op (infra/deploy.ps1 opretter variablerne)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AZURE_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    concurrency: azure-production
+    permissions:
+      contents: read
+      packages: read
+      id-token: write # OIDC: GitHub udsteder et kortlivet token, Azure stoler på det. Ingen gemte adgangskoder
+    steps:
+      - name: Log ind i Azure (OIDC, managed identity)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Flyt det testede image fra GHCR til Azure Container Registry
+        run: |
+          set -euo pipefail
+          SOURCE="ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA::7}"
+          TARGET="${{ vars.AZURE_ACR_NAME }}.azurecr.io/iot-predictive-maintenance:sha-${GITHUB_SHA::7}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$SOURCE"
+          az acr login --name "${{ vars.AZURE_ACR_NAME }}"
+          docker tag "$SOURCE" "$TARGET"
+          docker push "$TARGET"
+          echo "IMAGE=$TARGET" >> "$GITHUB_ENV"
+
+      - name: Deploy ny revision
+        run: |
+          az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+          az containerapp update \
+            --name "${{ vars.AZURE_CONTAINERAPP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "$IMAGE" --output none
+
+      - name: Smoke test i Azure
+        run: |
+          set -euo pipefail
+          APP="${{ vars.AZURE_CONTAINERAPP_NAME }}"
+          RG="${{ vars.AZURE_RESOURCE_GROUP }}"
+          for i in $(seq 1 30); do
+            LATEST=$(az containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv)
+            READY=$(az containerapp show -n "$APP" -g "$RG" --query properties.latestReadyRevisionName -o tsv)
+            [ "$LATEST" = "$READY" ] && break
+            echo "Venter på at revision $LATEST bliver klar..."; sleep 10
+          done
+          FQDN=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
+          curl -fsS --retry 10 --retry-delay 6 --retry-all-errors "https://$FQDN/health"
+          echo
+          echo "### Deployet til https://$FQDN/docs" >> "$GITHUB_STEP_SUMMARY"

@@ -5,6 +5,7 @@ Databasen kører som en separat container (PostgreSQL) og tilgås kun gennem det
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import fields
@@ -152,7 +153,12 @@ class SqlMonitoringRepository:
 
 def create_db_engine(database_url: str) -> Engine:
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, pool_pre_ping=True, connect_args=connect_args)
+    return create_engine(
+        database_url,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+        json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),  # gem fx "°C" læsbart
+    )
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
