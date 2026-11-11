@@ -1,0 +1,6 @@
+# Gennemgåede falske positiver fra gitleaks (secret scanning).
+# Indbyggede Azure-rolle-id'er (Key Vault Secrets User/Officer) er offentlige GUID'er, ikke hemmeligheder.
+06efde6884a37b65fb5c4798f3a5372a2026eaec:infra/main.bicep:generic-api-key:49
+06efde6884a37b65fb5c4798f3a5372a2026eaec:infra/main.bicep:generic-api-key:50
+9705e6d89ea1183f3420c793536453a958ff0d4c:infra/main.bicep:generic-api-key:49
+9705e6d89ea1183f3420c793536453a958ff0d4c:infra/main.bicep:generic-api-key:50

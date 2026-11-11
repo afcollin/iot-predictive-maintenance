@@ -69,6 +69,25 @@ def test_unexpected_error_fails_securely(make_client, monkeypatch, caplog):
     assert "hemmelig" in caplog.text  # men detaljerne er i loggen til driften
 
 
+def test_security_headers_found_by_dast_are_set(client):
+    for path in ("/health", "/api/v1/thresholds"):
+        headers = client.get(path).headers
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["Cross-Origin-Resource-Policy"] == "same-origin"
+        assert headers["X-Frame-Options"] == "DENY"
+    assert client.get("/api/v1/thresholds").headers["Cache-Control"] == "no-store"
+
+
+def test_successful_health_probes_are_not_written_to_the_audit_log(client, caplog):
+    caplog.set_level("INFO")
+    client.get("/health")
+    client.get("/api/v1/thresholds")
+
+    logged_paths = [getattr(r, "path", None) for r in caplog.records if r.getMessage() == "HTTP-request"]
+    assert "/api/v1/thresholds" in logged_paths
+    assert "/health" not in logged_paths
+
+
 def test_acknowledge_requires_employee_id_not_a_name(client):
     alarm_id = client.post("/api/v1/sensor-readings", json=reading(12.0)).json()["alarm_id"]
 

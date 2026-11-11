@@ -40,6 +40,10 @@ class Notifier(Protocol):
     def notify(self, alarm: Alarm, action: AlarmAction) -> None: ...
 
 
+class ConcurrencyConflict(Exception):
+    """En anden instans har samtidig gemt en ændring, der strider mod en invariant (fx to åbne alarmer)."""
+
+
 @dataclass(frozen=True)
 class ReadingOutcome:
     reading_event_id: str
@@ -57,6 +61,19 @@ class MonitoringService:
         self._policy = policy
 
     def handle_sensor_reading(self, reading: SensorReading) -> ReadingOutcome:
+        try:
+            return self._handle_sensor_reading(reading)
+        except ConcurrencyConflict:
+            # Med flere instanser kan to målinger samtidig nå at se "ingen åben alarm". Databasen afviser den
+            # anden alarm (unikt indeks), hele transaktionen rulles tilbage, og målingen behandles én gang til.
+            # Anden gang findes den åbne alarm, så anomalien registreres på den (REPEATED/ESCALATED).
+            logger.warning(
+                "Samtidig alarm for samme anlæg og målepunkt – prøver igen",
+                extra={"asset_id": reading.asset_id, "metric": reading.metric},
+            )
+            return self._handle_sensor_reading(reading)
+
+    def _handle_sensor_reading(self, reading: SensorReading) -> ReadingOutcome:
         # 1. Validering: kendt målepunkt og fysisk mulig værdi (ellers DomainError)
         rule = self._policy.rule_for(reading)
 

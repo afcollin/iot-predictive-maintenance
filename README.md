@@ -144,17 +144,48 @@ pytest --cov=app
 
 ```mermaid
 flowchart LR
-    P[git push] --> T["Lint og test<br/>ruff + pytest"]
-    P --> SEC["Sikkerhedsscanning<br/>bandit (SAST) + pip-audit (SCA)"]
-    T --> B["Docker build<br/>+ smoke test af event-flowet"]
+    P[git push / PR] --> T["Lint og test<br/>ruff + pytest + Bicep-validering"]
+    P --> SEC["Sikkerhedsscanning<br/>gitleaks (secrets) · bandit (SAST) · pip-audit (SCA)"]
+    T --> B["Docker build<br/>smoke test + OWASP ZAP (DAST)"]
     SEC --> B
     B -- "kun main" --> G["Publicér image<br/>ghcr.io"]
     G --> D["Deploy til Azure<br/>OIDC → ACR → Container Apps<br/>+ health check"]
 ```
 
-Pull requests kører test, sikkerhedsscanning og smoke test, men deployer ikke. Kun `main` deployes.
+Pull requests kører alt undtagen publicering og deploy. Kun `main` deployes, automatisk (continuous deployment).
 Det image, der deployes, er præcis det, der blev testet (build once, deploy many).
+DAST-rapporten fra OWASP ZAP gemmes som artefakt (`zap-dast-rapport`) på hver kørsel.
 Dependabot (`.github/dependabot.yml`) foreslår ugentligt opdateringer af afhængigheder, actions og base-image.
+
+### Branching, miljøer og rollback
+
+| | |
+|---|---|
+| Branching | GitHub Flow: feature-branch → pull request med grønne checks → squash-merge til `main` |
+| Miljøer | **dev**: lokal Docker Compose · **test**: flygtig stak i CI (smoke test + DAST) · **prod**: Azure Container Apps |
+| Rollback | Hver deploy er en ny revision med image `sha-<commit>`. Tilbage til forrige version: `az containerapp update -n ca-iotpm-api -g rg-iot-predictive-maintenance --image <acr>/iot-predictive-maintenance:sha-<forrige>` eller en `git revert` på `main` |
+
+## Monitorering og SLO
+
+**SLO:** 99,5 % af kald til `/api/v1` uden serverfejl (5xx) pr. måned. Fejlbudget: 0,5 %.
+
+| Alarmregel (Azure Monitor, `infra/main.bicep`) | Udløses når |
+|---|---|
+| `alert-iotpm-serverfejl` | ét eller flere HTTP 5xx-svar inden for 5 min |
+| `alert-iotpm-genstarter` | mere end 2 genstarter af containeren inden for 15 min |
+
+SLI'en måles i Log Analytics (appens JSON-logs ligger i `ContainerAppConsoleLogs_CL`):
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-iotpm-api"
+| extend e = parse_json(Log_s)
+| where e.msg == "HTTP-request" and tostring(e.path) startswith "/api/v1"
+| summarize kald = count(), serverfejl = countif(toint(e.status_code) >= 500)
+| extend fejlfri_procent = round(100.0 * (kald - serverfejl) / kald, 2)
+```
+
+Health probes (`/health` med svar 200) logges ikke, så loggen kun viser rigtige kald.
 
 ## Drift i Azure
 
@@ -201,10 +232,12 @@ Defense in depth, lag for lag:
 | Identitet og adgang | API-nøgle (`X-API-Key`) på alle forretnings-endpoints, sammenlignet i konstant tid. Nøglen ligger i en miljøvariabel, aldrig i koden |
 | Netværk | Databasen er ikke udstillet uden for Docker-netværket. Containeren kører som ikke-root-bruger |
 | Applikation og API | Inputvalidering af id'er, målepunkter og værdier (afviser `NaN`, `Infinity`, `<script>` og injection-forsøg). Alle SQL-forespørgsler er parametriserede via SQLAlchemy. Rate limiting (standard 120 kald/min pr. klient → `429` med `Retry-After`), også på forkerte nøgler mod brute force |
-| Data | Telemetri fra vindmøller er ikke personoplysninger. Ved kvittering gemmes et medarbejder-id (`OP-117`), ikke et navn (GDPR art. 5, dataminimering) |
+| Data | Telemetri fra vindmøller er ikke personoplysninger. Personoplysninger: medarbejder-id ved kvittering (`OP-117`, ikke navn) og klient-IP i audit-loggen (formål: sikkerhed). Opbevaring: logs 30 dage (Log Analytics), rå målinger 90 dage, anomalier og alarmer 2 år (GDPR art. 5) |
 | Logning og audit | Hvert kald logges som JSON med tid, klient-IP, endpoint, statuskode og varighed. Afviste nøgler og rate limit-brud logges som `WARNING`. API-nøgler logges aldrig |
 | Fejl sikkert | Global exception handler: klienten får en generisk besked og et `request_id`. Detaljerne står kun i loggen |
-| Pipeline (shift-left) | SAST (bandit), SCA (pip-audit) og Dependabot. Secrets aldrig i repo (`.env` er i `.gitignore`) |
+| Pipeline (shift-left) | Secret scanning (gitleaks), SAST (bandit), SCA (pip-audit), DAST (OWASP ZAP) og Dependabot. Secrets aldrig i repo (`.env` er i `.gitignore`) |
+| Sikkerhedsheadere | `X-Content-Type-Options`, `Cross-Origin-Resource-Policy`, `X-Frame-Options` og `Cache-Control: no-store` – tilføjet efter fund i DAST |
+| Samtidighed | Et partielt unikt indeks håndhæver "højst én åben alarm pr. anlæg og målepunkt", også med flere instanser |
 
 ## Projektstruktur
 

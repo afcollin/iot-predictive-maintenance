@@ -99,6 +99,7 @@ $parameters = @{
     githubRepo       = $GitHubRepo
     githubOwnerId    = $githubOwnerId
     githubRepoId     = $githubRepoId
+    alertEmail       = $account.user.name   # alarmer sendes til den, der udruller
     apiKey           = $apiKey
     dbPassword       = $dbPassword
     adminPrincipalId = $adminPrincipalId

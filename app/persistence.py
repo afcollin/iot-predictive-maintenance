@@ -12,11 +12,12 @@ from dataclasses import fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Engine, Float, Integer, String, create_engine, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import JSON, DateTime, Engine, Float, Index, Integer, String, create_engine, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from app.domain import Alarm, AlarmNotFound, AlarmStatus, DomainEvent, EventType, Severity
+from app.service import ConcurrencyConflict
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,18 @@ class AlarmRecord(Base):
     """Output: den aktuelle tilstand af hver alarm."""
 
     __tablename__ = "alarms"
+    # Databasen håndhæver aggregatets invariant: højst én ÅBEN alarm pr. anlæg og målepunkt,
+    # også når flere instanser af API'et skriver samtidig (partielt unikt indeks)
+    __table_args__ = (
+        Index(
+            "uq_alarms_open_per_asset_metric",
+            "asset_id",
+            "metric",
+            unique=True,
+            postgresql_where=text("status = 'OPEN'"),
+            sqlite_where=text("status = 'OPEN'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     asset_id: Mapped[str] = mapped_column(String(50), index=True)
@@ -148,7 +161,11 @@ class SqlMonitoringRepository:
         return [_to_event(r) for r in self._session.scalars(query)]
 
     def commit(self) -> None:
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError as exc:
+            self._session.rollback()
+            raise ConcurrencyConflict("Ændringen strider mod en databasebegrænsning") from exc
 
 
 def create_db_engine(database_url: str) -> Engine:
@@ -170,6 +187,9 @@ def init_db(engine: Engine, attempts: int = 10, delay_seconds: float = 2.0) -> N
     for attempt in range(1, attempts + 1):
         try:
             Base.metadata.create_all(engine)
+            # create_all tilføjer ikke nye indeks til tabeller, der allerede findes (fx i Azure)
+            for index in AlarmRecord.__table__.indexes:
+                index.create(engine, checkfirst=True)
             return
         except OperationalError:
             if attempt == attempts:
