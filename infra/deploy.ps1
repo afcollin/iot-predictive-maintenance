@@ -5,11 +5,14 @@
 .DESCRIPTION
     1. Registrerer resource providers og opretter resource group
     2. Udruller infrastrukturen fra main.bicep (uden app)
-    3. Bygger Docker-image lokalt og pusher det til Azure Container Registry
+    3. Første gang: bygger Docker-image lokalt og pusher det til Azure Container Registry.
+       Findes app'en allerede, genbruges det image, der kører (build once, deploy many)
     4. Udruller igen, nu med Container App'en
     5. Gemmer Azure-id'erne som GitHub-variabler, så pipelinen kan deploye via OIDC
 
-    Scriptet kan køres igen. Eksisterende hemmeligheder genbruges, medmindre -RotateSecrets angives.
+    Scriptet kan køres igen, fx efter ændringer i main.bicep. Det rører ikke det image, pipelinen har
+    testet og deployet, medmindre -BuildImage angives. Eksisterende hemmeligheder genbruges,
+    medmindre -RotateSecrets angives.
 
 .EXAMPLE
     ./infra/deploy.ps1 -Location francecentral
@@ -20,7 +23,9 @@ param(
     [string]$ResourceGroup = "rg-iot-predictive-maintenance",
     [string]$GitHubRepo = "afcollin/iot-predictive-maintenance",
     [int]$MinReplicas = 1,
-    [switch]$RotateSecrets
+    [switch]$RotateSecrets,
+    # Byg og push et nyt image fra den lokale kode, selvom app'en allerede kører
+    [switch]$BuildImage
 )
 
 $ErrorActionPreference = "Stop"
@@ -113,12 +118,20 @@ $acrName = $outputs.acrName.value
 $loginServer = $outputs.acrLoginServer.value
 
 Write-Host "`n== 3/5 Docker-image til Azure Container Registry ==" -ForegroundColor Cyan
-$sha = (Invoke-Native git -C $repoRoot rev-parse --short HEAD).Trim()
-$image = "$loginServer/iot-predictive-maintenance:sha-$sha"
-Invoke-Native az acr login --name $acrName --only-show-errors | Out-Null
-Invoke-Native docker build -t $image $repoRoot | Out-Null
-Invoke-Native docker push $image | Out-Null
-Write-Host "Pushet: $image"
+$runningImage = Invoke-Optional az containerapp show --name $outputs.appName.value --resource-group $ResourceGroup `
+    --query "properties.template.containers[0].image" -o tsv
+if ($runningImage -and -not $BuildImage) {
+    # Pipelinen har allerede testet og deployet dette image. Et lokalt build ville overskrive det.
+    $image = $runningImage
+    Write-Host "Genbruger det kørende image: $image"
+} else {
+    $sha = (Invoke-Native git -C $repoRoot rev-parse --short HEAD).Trim()
+    $image = "$loginServer/iot-predictive-maintenance:sha-$sha"
+    Invoke-Native az acr login --name $acrName --only-show-errors | Out-Null
+    Invoke-Native docker build -t $image $repoRoot | Out-Null
+    Invoke-Native docker push $image | Out-Null
+    Write-Host "Pushet: $image"
+}
 
 Write-Host "`n== 4/5 Container App ==" -ForegroundColor Cyan
 $outputs = Invoke-Deployment ($parameters + @{ deployApp = $true; containerImage = $image })

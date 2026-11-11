@@ -7,8 +7,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Containeren kører som en almindelig bruger, ikke root (least privilege)
-RUN useradd --create-home --uid 10001 appuser
+# Containeren kører som en almindelig bruger, ikke root (least privilege).
+# appuser må kun skrive i /app/data, ikke i koden.
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir /app/data && chown appuser /app/data
+
+# Standard: SQLite i /app/data, så imaget kan køres alene med `docker run`.
+# Docker Compose og Azure sætter DATABASE_URL til PostgreSQL.
+ENV DATABASE_URL=sqlite:////app/data/iot.db
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt

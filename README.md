@@ -73,7 +73,7 @@ sequenceDiagram
 Kræver [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/afcollin/iot-predictive-maintenance.git
 cd iot-predictive-maintenance
 docker compose up -d --build
 ```
@@ -85,6 +85,21 @@ docker compose up -d --build
 | Adminer (se databasen) | http://localhost:8080 – System: *PostgreSQL*, Server: `db`, Bruger: `iot`, Adgangskode: `iot-local-password`, Database: `iot_monitoring` |
 
 API-nøglen er `local-dev-key`, medmindre andet er sat i `.env` (se `.env.example`).
+
+### Kør kun imaget (uden at klone repo'et)
+
+Pipelinen publicerer det testede image på GitHub Container Registry. Uden `DATABASE_URL` bruger imaget
+SQLite i `/app/data`, så det kan køre alene:
+
+```bash
+docker run -d --name iotpm -p 8000:8000 -e API_KEY=vaelg-en-noegle -v iotpm-data:/app/data ghcr.io/afcollin/iot-predictive-maintenance:latest
+```
+
+Swagger ligger på http://localhost:8000/docs, og volumen `iotpm-data` gemmer data, så de ikke forsvinder med containeren.
+PostgreSQL og Adminer følger kun med i Docker Compose.
+
+* Imaget er bygget til `linux/amd64`. På en Mac med Apple-chip tilføjes `--platform linux/amd64`.
+* Er pakken privat, kræves først `docker login ghcr.io` med en GitHub-token med rettigheden `read:packages`.
 
 ### Send målinger fra en anden computer (IoT-enhed)
 
@@ -194,26 +209,31 @@ Health probes (`/health` med svar 200) logges ikke, så loggen kun viser rigtige
 ## Drift i Azure
 
 Infrastrukturen er beskrevet som kode i `infra/main.bicep` og udrulles med `infra/deploy.ps1`.
+Første gang opretter scriptet hele miljøet. Derefter deployer pipelinen nye versioner af koden.
+Ændringer i `main.bicep` udrulles ved at køre scriptet igen. Scriptet genbruger så det image, der kører, så det
+testede image ikke overskrives af et lokalt build (`-BuildImage` tvinger et nyt build).
 
 ```mermaid
 flowchart LR
     GH["GitHub Actions"] -- "OIDC (ingen adgangskoder)" --> MI1["Managed identity<br/>id-iotpm-github"]
     MI1 -- AcrPush --> ACR["Container Registry"]
     MI1 -- "Contributor (kun app'en)" --> CA
-    DEV["IoT-enhed / Postman"] -- HTTPS --> CA["Container App<br/>FastAPI · 0-2 instanser"]
+    DEV["IoT-enhed / Postman"] -- HTTPS --> CA["Container App<br/>FastAPI · 1-2 instanser"]
     CA -- "id-iotpm-app: AcrPull" --> ACR
     CA -- "id-iotpm-app: Secrets User" --> KV["Key Vault<br/>api-key · database-url"]
     CA -- TLS --> PG[("PostgreSQL<br/>Flexible Server")]
     CA -- stdout --> LA["Log Analytics"]
+    CA -- metrics --> AM["Azure Monitor<br/>2 alarmregler → e-mail"]
 ```
 
 | Ressource | Formål |
 |---|---|
-| Container Apps | Kører API'et serverless med HTTPS, health probes og autoskalering |
+| Container Apps | Kører API'et serverless med HTTPS, health probes og autoskalering mellem 1 og 2 instanser |
 | PostgreSQL Flexible Server (B1ms) | Separat database for domain events og alarmer, kun TLS |
 | Key Vault | API-nøgle og database-forbindelse. Appen henter dem via sin managed identity |
 | Container Registry | Private images. Kun adgang via Entra ID-identiteter (admin-bruger slået fra) |
-| Log Analytics | Samler appens JSON-logs til søgning og overvågning |
+| Log Analytics | Samler appens JSON-logs til søgning og overvågning (opbevares 30 dage) |
+| Azure Monitor | Alarmregler for serverfejl og genstarter. Sender e-mail via action groupen `ag-iotpm-drift` |
 | Managed identities | `id-iotpm-app` (læse image og secrets) og `id-iotpm-github` (deploy). Least privilege |
 
 ```powershell
@@ -253,10 +273,15 @@ app/
   api.py            REST-endpoints
   schemas.py        API-kontrakt (bliver til Swagger)
   notifier.py       notifikation via log og webhook
-  security.py       API-nøgle
+  security.py       API-nøgle og rate limiting
+  config.py         konfiguration fra miljøvariabler
   logging_setup.py  struktureret JSON-logging
-  main.py           opstart, health check, fejlhåndtering
+  main.py           opstart, health check, sikkerhedsheadere, fejlhåndtering
 device_simulator/   IoT-enhed (kun standardbibliotek)
 postman/            Postman-collection til demo
-tests/
+tests/              unit-, integrations-, sikkerheds- og samtidighedstests
+infra/              Bicep (main.bicep) og udrulningsscript (deploy.ps1)
+.github/            CI/CD-pipeline (workflows/ci-cd.yml) og Dependabot
+Dockerfile          image til alle miljøer (ikke-root-bruger)
+docker-compose.yml  lokal stak: API, PostgreSQL og Adminer
 ```
