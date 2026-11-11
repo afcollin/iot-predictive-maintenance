@@ -137,6 +137,10 @@ pytest --cov=app
 * `tests/test_domain.py` – unit tests af forretningsreglerne (uden database)
 * `tests/test_api.py` – integrationstests af hele flowet gennem API'et til databasen
 * `tests/test_notifier.py` – notifikation, herunder at en fejlende webhook ikke vælter modtagelsen
+* `tests/test_security.py` – rate limiting, audit-log, sikker fejlhåndtering, sikkerhedsheadere og dataminimering
+* `tests/test_concurrency.py` – to samtidige anomalier giver ikke to åbne alarmer (simulerer to instanser)
+
+I alt 45 tests (97 % dækning). I pipelinen kommer smoke test, DAST og health check efter deploy oveni.
 
 ## CI/CD (GitHub Actions)
 
