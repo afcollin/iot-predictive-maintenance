@@ -18,6 +18,9 @@ param githubOwnerId string = ''
 @description('Repo\'ets numeriske id. Bruges i det nye, uforanderlige OIDC-subject-format.')
 param githubRepoId string = ''
 
+@description('E-mail, der får besked, når en alarmregel udløses. Tom = ingen e-mail (alarmen ses stadig i portalen).')
+param alertEmail string = ''
+
 @description('Opret selve Container App\'en. Første kørsel er false, fordi image\'et skal ligge i registry\'et først.')
 param deployApp bool = false
 
@@ -48,12 +51,12 @@ var tags = {
   course: 'KEA-6.2-afleveringsopgave-2'
 }
 
-// Indbyggede Azure-roller (faste id'er)
+// Indbyggede Azure-roller (faste, offentlige id'er – ikke hemmeligheder, derfor gitleaks:allow)
 var roles = {
   acrPull: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
   acrPush: '8311e382-0749-4cb8-b61a-304f252e45ec'
-  keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
-  keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+  keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6' // gitleaks:allow
+  keyVaultSecretsOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' // gitleaks:allow
   contributor: 'b24988ac-6180-42a0-ab88-20f7382dd24c'
   reader: 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 }
@@ -375,6 +378,96 @@ resource contributorOnAppForGithub 'Microsoft.Authorization/roleAssignments@2022
     principalId: githubIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.contributor)
+  }
+}
+
+// --- Monitorering: alarmregler (SLO: 99,5 % af kald uden serverfejl pr. måned) -------
+
+resource opsActionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (!empty(alertEmail)) {
+  name: 'ag-iotpm-drift'
+  location: 'global'
+  tags: tags
+  properties: {
+    groupShortName: 'iotpmdrift'
+    enabled: true
+    emailReceivers: [
+      {
+        name: 'Driftsansvarlig'
+        emailAddress: alertEmail
+        useCommonAlertSchema: true
+      }
+    ]
+  }
+}
+
+var alertActions = empty(alertEmail) ? [] : [{ actionGroupId: opsActionGroup.id }]
+
+// Serverfejl brænder af fejlbudgettet. Én 5xx på 5 minutter giver besked, så fejlen kan findes i loggen (request_id)
+resource serverErrorAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (deployApp) {
+  name: 'alert-iotpm-serverfejl'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'API\'et har svaret med HTTP 5xx. Find fejlen i Log Analytics via request_id.'
+    severity: 2
+    enabled: true
+    scopes: [app.id]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'Serverfejl'
+          metricNamespace: 'Microsoft.App/containerApps'
+          metricName: 'Requests'
+          dimensions: [
+            {
+              name: 'statusCodeCategory'
+              operator: 'Include'
+              values: ['5xx']
+            }
+          ]
+          operator: 'GreaterThan'
+          threshold: 0
+          timeAggregation: 'Total'
+        }
+      ]
+    }
+    actions: alertActions
+  }
+}
+
+// Gentagne genstarter betyder, at health probes fejler, fx fordi databasen ikke kan nås
+resource restartAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = if (deployApp) {
+  name: 'alert-iotpm-genstarter'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'Containeren er genstartet flere gange. Tjek /health og databaseforbindelsen.'
+    severity: 2
+    enabled: true
+    scopes: [app.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'Genstarter'
+          metricNamespace: 'Microsoft.App/containerApps'
+          metricName: 'RestartCount'
+          operator: 'GreaterThan'
+          threshold: 2
+          timeAggregation: 'Total'
+        }
+      ]
+    }
+    actions: alertActions
   }
 }
 

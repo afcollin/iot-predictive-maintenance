@@ -25,12 +25,18 @@ jobs:
         run: ruff check .
       - name: Unit- og integrationstests (pytest)
         run: pytest --cov=app --cov-report=term-missing
+      - name: Valider infrastruktur som kode (Bicep)
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null
 
   security:
     name: Sikkerhedsscanning (DevSecOps)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # hele historikken, så secret scanning også finder hemmeligheder i gamle commits
+      - name: Secret scanning - hemmeligheder i git-historikken (gitleaks)
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 detect --source /repo --redact --no-banner -v
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -43,7 +49,7 @@ jobs:
         run: pip-audit -r requirements.txt
 
   build:
-    name: Docker build, smoke test og publish
+    name: Docker build, smoke test, DAST og publish
     needs: [test, security]
     runs-on: ubuntu-latest
     permissions:
@@ -51,6 +57,7 @@ jobs:
       packages: write
     env:
       API_KEY: ci-smoke-test-key
+      RATE_LIMIT_PER_MINUTE: "0" # slået fra i CI, så DAST-scanningen ikke bremses af 429-svar
     steps:
       - uses: actions/checkout@v5
 
@@ -68,6 +75,25 @@ jobs:
           echo
           curl -fsS "http://localhost:8000/api/v1/alarms?asset_id=WTG-CI-01" -H "X-API-Key: $API_KEY" | tee alarms.json
           grep -q '"status":"OPEN"' alarms.json
+
+      - name: DAST - angreb mod den kørende API (OWASP ZAP API scan)
+        run: |
+          mkdir -p zap && chmod 777 zap
+          # Scanner alle endpoints fra OpenAPI-specifikationen med API-nøglen sat på hvert kald.
+          # Fund på FAIL-niveau stopper pipelinen; advarsler kommer med i rapporten.
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t http://localhost:8000/openapi.json -f openapi -r zap-rapport.html -I \
+            -z "-config replacer.full_list(0).description=apikey -config replacer.full_list(0).enabled=true \
+                -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=X-API-Key \
+                -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=$API_KEY"
+
+      - name: Gem DAST-rapporten
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-dast-rapport
+          path: zap/zap-rapport.html
+          if-no-files-found: ignore
 
       - name: Vis container-logs ved fejl
         if: failure()

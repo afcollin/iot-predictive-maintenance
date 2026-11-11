@@ -57,6 +57,13 @@ _ERROR_STATUS: dict[type[DomainError], int] = {
 }
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9\-]{1,64}$")
 
+# Tilføjet efter DAST-scanning (OWASP ZAP fandt manglende X-Content-Type-Options og Cross-Origin-Resource-Policy)
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",  # browseren må ikke gætte indholdstypen
+    "Cross-Origin-Resource-Policy": "same-origin",  # andre websites må ikke indlejre svarene
+    "X-Frame-Options": "DENY",  # Swagger-siden må ikke vises i en iframe (clickjacking)
+}
+
 
 def create_app(settings: Settings | None = None, notifier: Notifier | None = None) -> FastAPI:
     settings = settings or Settings()
@@ -96,6 +103,11 @@ def create_app(settings: Settings | None = None, notifier: Notifier | None = Non
         start = time.perf_counter()
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        response.headers.update(_SECURITY_HEADERS)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"  # måledata og alarmer må ikke caches undervejs
+        if request.url.path == "/health" and response.status_code == 200:
+            return response  # platformens health probes (hvert 10. s) ville ellers drukne de rigtige kald i loggen
         logger.info(
             "HTTP-request",
             extra={
