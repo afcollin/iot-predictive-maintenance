@@ -126,7 +126,7 @@ jobs:
       id-token: write # OIDC: GitHub udsteder et kortlivet token, Azure stoler på det. Ingen gemte adgangskoder
     steps:
       - name: Log ind i Azure (OIDC, managed identity)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
