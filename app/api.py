@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app import metrics
 from app.domain import AlarmStatus, EventType, SensorReading, utcnow
 from app.persistence import SqlMonitoringRepository
 from app.schemas import (
@@ -72,6 +73,7 @@ def receive_sensor_reading(body: SensorReadingIn, service: Service) -> ReadingRe
         measured_at=measured_at,
     )
     outcome = service.handle_sensor_reading(reading)
+    metrics.record_reading(outcome, reading.metric, reading.measured_at)
     return ReadingResultOut.model_validate(outcome)
 
 
@@ -99,7 +101,9 @@ def get_alarm(alarm_id: str, repository: Repository) -> AlarmOut:
     responses={404: {"description": "Alarmen findes ikke"}, 409: {"description": "Alarmen er allerede kvitteret"}},
 )
 def acknowledge_alarm(alarm_id: str, body: AcknowledgeIn, service: Service) -> AlarmOut:
-    return AlarmOut.model_validate(service.acknowledge_alarm(alarm_id, body.acknowledged_by))
+    alarm = service.acknowledge_alarm(alarm_id, body.acknowledged_by)
+    metrics.record_acknowledged(alarm)
+    return AlarmOut.model_validate(alarm)
 
 
 @router.get("/events", response_model=list[EventOut], tags=["Domain events"], summary="List domain events")

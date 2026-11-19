@@ -14,8 +14,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app import __version__
+from app import __version__, metrics
 from app.api import router
 from app.config import Settings
 from app.domain import (
@@ -29,7 +30,13 @@ from app.domain import (
 )
 from app.logging_setup import configure_logging
 from app.notifier import LogNotifier, WebhookNotifier
-from app.persistence import create_db_engine, create_session_factory, database_is_healthy, init_db
+from app.persistence import (
+    SqlMonitoringRepository,
+    create_db_engine,
+    create_session_factory,
+    database_is_healthy,
+    init_db,
+)
 from app.schemas import HealthOut
 from app.security import RateLimiter, client_ip
 from app.service import Notifier
@@ -101,13 +108,19 @@ def create_app(settings: Settings | None = None, notifier: Notifier | None = Non
         request_id = incoming if _REQUEST_ID.match(incoming) else new_id()
         request.state.request_id = request_id
         start = time.perf_counter()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            _observe_http(request, 500, start)  # uventede fejl håndteres længere ude, men skal tælles med
+            raise
+        _observe_http(request, response.status_code, start)
         response.headers["X-Request-ID"] = request_id
         response.headers.update(_SECURITY_HEADERS)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"  # måledata og alarmer må ikke caches undervejs
-        if request.url.path == "/health" and response.status_code == 200:
-            return response  # platformens health probes (hvert 10. s) ville ellers drukne de rigtige kald i loggen
+        if request.url.path in ("/health", "/metrics") and response.status_code == 200:
+            # health probes (hvert 10. s) og Prometheus (hvert 5. s) ville ellers drukne de rigtige kald i loggen
+            return response
         logger.info(
             "HTTP-request",
             extra={
@@ -143,6 +156,8 @@ def create_app(settings: Settings | None = None, notifier: Notifier | None = Non
     @app.exception_handler(DomainError)
     async def handle_domain_error(request: Request, exc: DomainError) -> JSONResponse:
         status_code = next((code for cls, code in _ERROR_STATUS.items() if isinstance(exc, cls)), 400)
+        if isinstance(exc, (UnknownMetric, ImplausibleSensorValue)):
+            metrics.SENSOR_VALUES_REJECTED.labels(reason=type(exc).__name__).inc()  # mulig sensorfejl
         logger.warning(
             str(exc), extra={"path": request.url.path, "status_code": status_code, "error": type(exc).__name__}
         )
@@ -159,5 +174,26 @@ def create_app(settings: Settings | None = None, notifier: Notifier | None = Non
             version=__version__,
         )
 
+    if settings.metrics_enabled:
+
+        @app.get("/metrics", include_in_schema=False)
+        def prometheus_metrics() -> Response:
+            """Prometheus henter (scraper) målingerne herfra. Antal åbne alarmer læses fra databasen."""
+            with app.state.session_factory() as session:
+                metrics.set_open_alarms(SqlMonitoringRepository(session).count_open_alarms_by_severity())
+            return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     app.include_router(router)
     return app
+
+
+def _observe_http(request: Request, status_code: int, start: float) -> None:
+    if request.url.path == "/metrics":
+        return
+    # Endpoint-skabelonen (fx /api/v1/alarms/{alarm_id}) i stedet for den konkrete sti, så antallet af
+    # tidsserier ikke vokser med hvert alarm-id. Ukendte stier (404) samles under "unmatched".
+    route = getattr(request.scope.get("route"), "path", None)
+    if route is None:
+        route = "unmatched" if status_code == 404 else request.url.path  # fx /docs og /openapi.json
+    metrics.HTTP_REQUESTS.labels(method=request.method, route=route, status=str(status_code)).inc()
+    metrics.HTTP_DURATION.labels(method=request.method, route=route).observe(time.perf_counter() - start)

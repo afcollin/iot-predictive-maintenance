@@ -16,3 +16,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # Maks. kald pr. minut pr. klient på /api/v1. 0 slår begrænsningen fra.
     rate_limit_per_minute: int = Field(default=120, ge=0)
+    # /metrics til Prometheus. Slået fra som standard, så driftsdata ikke udstilles offentligt i Azure.
+    # Docker Compose slår det til lokalt (dev), hvor Prometheus og Grafana kører i samme netværk.
+    metrics_enabled: bool = False

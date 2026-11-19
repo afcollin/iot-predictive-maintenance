@@ -154,8 +154,9 @@ pytest --cov=app
 * `tests/test_notifier.py` – notifikation, herunder at en fejlende webhook ikke vælter modtagelsen
 * `tests/test_security.py` – rate limiting, audit-log, sikker fejlhåndtering, sikkerhedsheadere og dataminimering
 * `tests/test_concurrency.py` – to samtidige anomalier giver ikke to åbne alarmer (simulerer to instanser)
+* `tests/test_metrics.py` – `/metrics` er slået fra som standard og tæller anomalier, kvitteringer og sensorfejl korrekt
 
-I alt 45 tests (97 % dækning). I pipelinen kommer smoke test, DAST og health check efter deploy oveni.
+I alt 49 tests (98 % dækning). I pipelinen kommer smoke test, DAST og health check efter deploy oveni.
 
 ## CI/CD (GitHub Actions)
 
@@ -163,7 +164,7 @@ I alt 45 tests (97 % dækning). I pipelinen kommer smoke test, DAST og health ch
 
 ```mermaid
 flowchart LR
-    P[git push / PR] --> T["Lint og test<br/>ruff + pytest + Bicep-validering"]
+    P[git push / PR] --> T["Lint og test<br/>ruff + pytest + validering af Bicep og Prometheus"]
     P --> SEC["Sikkerhedsscanning<br/>gitleaks (secrets) · bandit (SAST) · pip-audit (SCA)"]
     T --> B["Docker build<br/>smoke test + OWASP ZAP (DAST)"]
     SEC --> B
@@ -205,6 +206,35 @@ ContainerAppConsoleLogs_CL
 ```
 
 Health probes (`/health` med svar 200) logges ikke, så loggen kun viser rigtige kald.
+
+### Observability lokalt: Prometheus og Grafana
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+python device_simulator/simulate.py --scenario degrading --count 60   # trafik til dashboardet
+```
+
+| URL | Indhold |
+|---|---|
+| http://localhost:3000 | Grafana-dashboardet *Asset Condition Monitoring* (uden login. Log ind som admin/admin for at redigere) |
+| http://localhost:9090/alerts | Prometheus' alarmregler (`observability/prometheus/alerts.yml`) |
+| http://localhost:8000/metrics | Rå metrics fra API'et |
+
+Kæden følger Goniwada kap. 19: API og database udstiller metrics, Prometheus samler dem (one source of truth),
+og Grafana viser dem (single source view). Dashboardet har to rækker:
+
+* **Domænet**: åbne alarmer, MTTA (tid fra alarm til kvittering), detektionstid fra måling til anomali,
+  målinger og anomalier pr. minut og afviste målinger (mulige sensorfejl)
+* **Drift (RED)**: oppe/nede for API og database, kald pr. sekund, svartid p95 og fejl (4xx/5xx) pr. endpoint
+
+`/metrics` er slået fra som standard (`METRICS_ENABLED=false`) og kun slået til i Compose-stakken, så driftsdata
+ikke udstilles offentligt i Azure. Er port 3000 eller 9090 optaget, sæt `GRAFANA_PORT` og `PROMETHEUS_PORT` i `.env`.
+
+### Incident management
+
+Processen for drift 24/7 står i [docs/incident-management.md](docs/incident-management.md): detektering,
+alvorsgrader (SEV1-3), roller, kommunikation, post incident review og KPI'er (MTTD, MTTA, MTTR, MTBF).
+Incidents og reviews registreres som GitHub Issues med skabelonerne *Incident* og *Post Incident Review*.
 
 ## Drift i Azure
 
@@ -274,14 +304,18 @@ app/
   schemas.py        API-kontrakt (bliver til Swagger)
   notifier.py       notifikation via log og webhook
   security.py       API-nøgle og rate limiting
+  metrics.py        Prometheus-metrics: drift (RED) og domænet (anomalier, MTTA, detektionstid)
   config.py         konfiguration fra miljøvariabler
   logging_setup.py  struktureret JSON-logging
   main.py           opstart, health check, sikkerhedsheadere, fejlhåndtering
 device_simulator/   IoT-enhed (kun standardbibliotek)
 postman/            Postman-collection til demo
-tests/              unit-, integrations-, sikkerheds- og samtidighedstests
+tests/              unit-, integrations-, sikkerheds-, samtidigheds- og metrics-tests
 infra/              Bicep (main.bicep) og udrulningsscript (deploy.ps1)
-.github/            CI/CD-pipeline (workflows/ci-cd.yml) og Dependabot
+observability/      Prometheus (scraping og alarmregler) og Grafana (datakilde og dashboard)
+docs/               runbook for incident management
+.github/            CI/CD-pipeline (workflows/ci-cd.yml), Dependabot og issue-skabeloner (incident, PIR)
 Dockerfile          image til alle miljøer (ikke-root-bruger)
 docker-compose.yml  lokal stak: API, PostgreSQL og Adminer
+docker-compose.observability.yml   tilføjer Prometheus, Grafana og postgres-exporter
 ```
