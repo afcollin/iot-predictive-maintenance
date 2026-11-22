@@ -12,7 +12,7 @@ from dataclasses import fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Engine, Float, Index, Integer, String, create_engine, select, text
+from sqlalchemy import JSON, DateTime, Engine, Float, Index, Integer, String, create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -159,6 +159,14 @@ class SqlMonitoringRepository:
         if asset_id is not None:
             query = query.where(EventRecord.asset_id == asset_id)
         return [_to_event(r) for r in self._session.scalars(query)]
+
+    def count_open_alarms_by_severity(self) -> dict[str, int]:
+        query = (
+            select(AlarmRecord.severity, func.count())
+            .where(AlarmRecord.status == AlarmStatus.OPEN.value)
+            .group_by(AlarmRecord.severity)
+        )
+        return {severity: count for severity, count in self._session.execute(query)}
 
     def commit(self) -> None:
         try:

@@ -1,0 +1,53 @@
+name: Incident
+description: Registrér en incident i Asset Condition Monitoring. Første skridt, når en incident er detekteret
+title: "[SEV?] Kort beskrivelse af påvirkningen"
+labels: ["incident"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opret issuet, så snart incidenten er detekteret, og følg processen i `docs/incident-management.md`.
+        Skriv fakta om systemer og forløb, ikke om personer (blameless).
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Alvorsgrad
+      options:
+        - "SEV1 – kritisk: sensordata modtages ikke, eller alarmer når ikke kontrolcentret"
+        - "SEV2 – alvorlig: forringet service, fx serverfejl, forsinkede alarmer eller mistænkelig adgang"
+        - "SEV3 – mindre: enkelte sensorer eller anlæg, ingen bred kundepåvirkning"
+    validations:
+      required: true
+  - type: input
+    id: detected
+    attributes:
+      label: Detekteret – hvornår og hvordan?
+      placeholder: "2026-11-19 14:05, Azure Monitor-alarmen alert-iotpm-serverfejl"
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Påvirkning
+      description: Hvilke kunder, anlæg og funktioner er ramt? Hvor mange?
+    validations:
+      required: true
+  - type: input
+    id: roles
+    attributes:
+      label: Roller
+      placeholder: "Incident manager: …  Tech lead: …  Kommunikationsansvarlig: …"
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Tidslinje og handlinger
+      value: |
+        - HH:MM Detekteret
+        - HH:MM Kvitteret af vagthavende (MTTA)
+        - HH:MM Kunder og kontrolcenter informeret
+        - HH:MM Løst, service genoprettet (MTTR)
+  - type: textarea
+    id: communication
+    attributes:
+      label: Kommunikation til interessenter
+      description: Hvad er sendt til hvem? Hvornår kommer næste opdatering?

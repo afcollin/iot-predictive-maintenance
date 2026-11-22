@@ -1,0 +1,63 @@
+# Observability oven på den almindelige stak (dev-miljøet på egen computer):
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+#
+#   Grafana:     http://localhost:3000   dashboardet "Asset Condition Monitoring" (login admin/admin for at redigere)
+#   Prometheus:  http://localhost:9090   Status -> Targets viser, om scraping virker. Alerts viser alarmreglerne
+#   Metrics:     http://localhost:8000/metrics
+#   Optaget port? Fx GRAFANA_PORT=3001 og PROMETHEUS_PORT=9091 i .env
+#
+# Kæden følger Goniwada kap. 19: app og database udstiller metrics -> Prometheus samler dem (one source of truth)
+# -> Grafana viser dem (single source view). I Azure har Azure Monitor og Log Analytics samme rolle.
+
+services:
+  api:
+    environment:
+      METRICS_ENABLED: "true"
+
+  # Udstiller PostgreSQL-metrics (forbindelser, størrelse, oppe/nede) i Prometheus-format
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    environment:
+      DATA_SOURCE_URI: db:5432/iot_monitoring?sslmode=disable
+      DATA_SOURCE_USER: iot
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:-iot-local-password}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - api
+      - postgres-exporter
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Kun i dev: dashboardet kan ses uden login. I produktion kræves login (fx Entra ID)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/asset-condition-monitoring.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:

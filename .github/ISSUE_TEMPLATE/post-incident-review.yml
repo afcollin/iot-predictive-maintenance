@@ -1,0 +1,52 @@
+name: Post Incident Review (PIR)
+description: Blameless gennemgang efter en løst incident, så den samme incident ikke sker igen
+title: "PIR: "
+labels: ["pir"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Holdes senest 5 arbejdsdage efter en SEV1- eller SEV2-incident. Vi beskriver systemer og processer, ikke personer.
+  - type: input
+    id: incident
+    attributes:
+      label: Incident-issue
+      placeholder: "#12"
+    validations:
+      required: true
+  - type: textarea
+    id: kpi
+    attributes:
+      label: Tidslinje og nøgletal
+      value: |
+        - Incidenten startede:
+        - Detekteret:            (MTTD = detekteret - start)
+        - Kvitteret:             (MTTA = kvitteret - detekteret)
+        - Løst:                  (MTTR = løst - detekteret)
+        - Forbrug af error budget (SLO 99,5 %):
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Rodårsag (5 x hvorfor)
+    validations:
+      required: true
+  - type: textarea
+    id: learnings
+    attributes:
+      label: Hvad gik godt, og hvad kan forbedres?
+  - type: textarea
+    id: actions
+    attributes:
+      label: Tiltag
+      description: Hvert tiltag oprettes som et issue med ejer og deadline
+      value: |
+        - [ ] Test, der genskaber fejlen, så pipelinen fanger den fremover
+        - [ ] Ny eller justeret alarmregel (hurtigere detektering)
+        - [ ] Opdatering af runbook (docs/incident-management.md)
+  - type: checkboxes
+    id: blameless
+    attributes:
+      label: Kultur
+      options:
+        - label: Reviewet er blameless og fokuserer på systemer og processer
+          required: true

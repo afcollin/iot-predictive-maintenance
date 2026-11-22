@@ -1,0 +1,53 @@
+# Alarmregler, der detekterer incidents, før kunderne opdager dem.
+# Label "severity" følger alvorsgraderne i docs/incident-management.md (SEV1 = mest alvorlig).
+# Lokalt vises de under http://localhost:9090/alerts. I Azure gør Azure Monitor det samme og sender e-mail.
+groups:
+  - name: asset-condition-monitoring
+    rules:
+      - alert: ApiNede
+        expr: up{job="api"} == 0
+        for: 1m
+        labels:
+          severity: SEV1
+        annotations:
+          summary: API'et svarer ikke. Sensordata modtages ikke, så kundernes anlæg er uovervågede.
+
+      - alert: DatabaseNede
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: SEV1
+        annotations:
+          summary: Databasen svarer ikke. Domain events og alarmer kan ikke gemmes.
+
+      - alert: Serverfejl
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) > 0
+        for: 2m
+        labels:
+          severity: SEV2
+        annotations:
+          summary: API'et returnerer 5xx-fejl. Find request_id i loggen.
+
+      - alert: KritiskAlarmIkkeKvitteret
+        expr: iot_open_alarms{severity="CRITICAL"} > 0
+        for: 15m
+        labels:
+          severity: SEV2
+        annotations:
+          summary: En kritisk alarm er ikke kvitteret efter 15 minutter. Eskalér til vagthavende i kontrolcentret.
+
+      - alert: MangeAfvisteMaalinger
+        expr: sum(rate(iot_sensor_values_rejected_total[5m])) * 60 > 5
+        for: 5m
+        labels:
+          severity: SEV3
+        annotations:
+          summary: Mere end 5 afviste målinger pr. minut. Sandsynligvis en defekt sensor eller forkert firmware.
+
+      - alert: UsaedvanligAdgang
+        expr: sum(rate(http_requests_total{status=~"401|429"}[5m])) * 60 > 10
+        for: 5m
+        labels:
+          severity: SEV2
+        annotations:
+          summary: Mange afviste kald (forkert API-nøgle eller rate limit). Mulig misbrug eller lækket nøgle.

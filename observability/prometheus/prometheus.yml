@@ -1,0 +1,16 @@
+# Prometheus henter (scraper) metrics fra API'et og databasen og gemmer dem som tidsserier.
+global:
+  scrape_interval: 5s # kort interval, så dashboardet reagerer hurtigt i demoen (typisk 15-60 s i produktion)
+  evaluation_interval: 5s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: api
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
